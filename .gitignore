@@ -1,0 +1,10 @@
+# tool working data — never committed
+paddleocr-docker-compose/input/*
+paddleocr-docker-compose/output/*
+paddleocr-docker-compose/models/
+!paddleocr-docker-compose/input/.gitkeep
+!paddleocr-docker-compose/output/.gitkeep
+.env
+*.log
+
+.superpowers/

@@ -1,0 +1,20 @@
+name: dance-songs-paddleocr
+
+services:
+  ocr:
+    build: .
+    image: dance-songs/paddleocr-docker-compose:latest
+    # GPU is required, not optional: this image is the sm_120 (Blackwell) build.
+    gpus: all
+    shm_size: 8g
+    stdin_open: false
+    tty: false
+    # Run as the caller so output files are not root-owned on the host.
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      HOME: /tmp
+      PADDLE_PDX_CACHE_HOME: /models
+    volumes:
+      - "${OCR_INPUT:-./input}:/data/input:ro"
+      - "${OCR_OUTPUT:-./output}:/out"
+      - "${OCR_MODELS:-./models}:/models"
