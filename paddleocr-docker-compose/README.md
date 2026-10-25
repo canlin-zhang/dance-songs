@@ -93,30 +93,46 @@ check `ls -l /etc/cdi/nvidia.yaml` and `docker info | grep -i cdi`.
 Blocks the layout model merged or split are visible there, and no amount of
 prompting fixes a bad box.
 
-### Known issue: the run can stall forever (under investigation)
+### Known issue: the run can stall forever (root cause located)
 
-Observed: a 205-page conversion sat for **4 h 23 m with zero pages produced**. Signature, consistent across every observation:
+Observed rate: **5 stalls in 39 single-page runs (12.8%, Wilson 95% CI
+5.6–26.7%)**. Every stall looked identical: one CPU core pinned near 100%, GPU
+idle, model weights resident in VRAM, no output, no error, indefinitely.
 
-- one CPU core pinned at ~97%, GPU at 3–5% utilisation and idle;
-- model weights already resident in VRAM (~11 GB), no error, no output;
-- container state `S`, with a single hot thread.
+**Where it spins.** `py-spy` on five independent stalls put the VLM worker
+thread in the same place every time: `cuLibraryGetModule` in `libcuda.so.1.1`,
+called from `cudaLaunchKernel` for the first bf16 `EmbeddingKernel`. Sampling
+the innermost frame 20 times during one stall returned the same address 12
+times; disassembling that address in the driver shows a spin loop:
 
-Captured once with `py-spy`: the VLM worker thread was inside
-`cuLibraryGetModule` (the CUDA driver), called from `cudaLaunchKernel` for
-`phi::EmbeddingKernel<bfloat16, GPUContext>`, reached from `greedy_search`.
+```
+4ddd90:  mov    -0x84(%rbp),%eax    ; read status
+4ddd99:  je     ...                 ; 1 = done, leave
+4ddda2:  je     ...                 ; 5 = done, leave
+4ddda8:  pause                      ; spin hint
+4dddaa:  call   0x12fd9a0           ; re-check
+4dddb7:  je     0x4ddd90            ; not ready -> loop
+```
 
-Two candidate explanations have been **ruled out** by measurement:
+**What that means.** The driver waits in userspace for a status word to become
+1 or 5. While it spins it issues **no system calls at all** — so this is not
+blocked I/O or a kernel wait, it is a memory flag that never changes. On WSL2
+that flag is updated by the Windows driver over `/dev/dxg`; when the update
+never arrives, the Linux side spins forever.
 
-- *PTX JIT compilation.* The image contains `sm_120` SASS (`-arch sm_120`
-  annotations in `libphi_gpu.so`), and an embedding kernel runs fine with
-  `CUDA_DISABLE_PTX_JIT=1`, which fails hard if a kernel has to be compiled.
-  So the driver is loading a prebuilt module, not compiling one.
-- *Insufficient VRAM.* No allocation error was ever raised; the same workload
-  completes on the same card, and 205 pages converted successfully once.
+**Ruled out by measurement:**
 
-What remains is the driver's module-load path over WSL2's `/dev/dxg`. The
-trigger is not identified. **Workaround: kill the container and run again** —
-every stall so far was resolved by a re-run.
+- *PTX JIT* — the image ships `sm_120` SASS (`-arch sm_120` annotations), and an
+  embedding kernel runs with `CUDA_DISABLE_PTX_JIT=1`, which fails hard if any
+  kernel has to be compiled. The driver is loading a prebuilt module.
+- *Insufficient VRAM* — no allocation error was ever raised, and the same
+  workload completes on the same card.
+- *Page count* — a single page stalls, eight pages stall, and the stall happens
+  before the first page is written, so it is independent of workload size.
+
+**Workaround, not a fix:** kill the container and run again. Every stall so far
+was resolved by a re-run. `CUDA_MODULE_LOADING=EAGER` changes the load timing,
+but it only changes when the flag is read — it does not remove this loop.
 
 ### TODO: throughput varies ~1.5× between runs
 
