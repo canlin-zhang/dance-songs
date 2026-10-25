@@ -130,9 +130,14 @@ never arrives, the Linux side spins forever.
 - *Page count* — a single page stalls, eight pages stall, and the stall happens
   before the first page is written, so it is independent of workload size.
 
-**Workaround, not a fix:** kill the container and run again. Every stall so far
-was resolved by a re-run. `CUDA_MODULE_LOADING=EAGER` changes the load timing,
-but it only changes when the flag is read — it does not remove this loop.
+**Mitigation, not a fix:** `compose.yaml` sets `CUDA_MODULE_LOADING=EAGER`.
+Measured on the same harness — **40/40 runs clean with EAGER against 5/39
+stalls without it** (Fisher exact, one-sided p ≈ 0.026). It costs about 15 s
+per run (56–63 s versus 36–43 s) because modules load at context init instead
+of at first launch. It does not remove the spin loop; it changes when the flag
+the loop waits on is read. At this rate it is the better trade, especially for
+a long batch where one stall wastes the whole run. If a stall still happens,
+kill the container and run again.
 
 ### TODO: throughput varies ~1.5× between runs
 

@@ -14,6 +14,10 @@ services:
     environment:
       HOME: /tmp
       PADDLE_PDX_CACHE_HOME: /models
+      # 40/40 clean single-page runs with this set, against 5/39 stalls without
+      # it (Fisher exact, one-sided p ~= 0.026). Costs ~15s per run. The spin
+      # loop still exists; this changes when the flag it waits on gets read.
+      CUDA_MODULE_LOADING: EAGER
     volumes:
       - "${OCR_INPUT:-./input}:/data/input:ro"
       - "${OCR_OUTPUT:-./output}:/out"
