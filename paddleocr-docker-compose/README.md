@@ -93,22 +93,38 @@ check `ls -l /etc/cdi/nvidia.yaml` and `docker info | grep -i cdi`.
 Blocks the layout model merged or split are visible there, and no amount of
 prompting fixes a bad box.
 
-### Known unresolved: stalls and variable throughput
+### Known issue: the run can stall forever (under investigation)
 
-On a 16 GB card, this pipeline occasionally does one of two things:
+Observed: a 205-page conversion sat for **4 h 23 m with zero pages produced**. Signature, consistent across every observation:
 
-- **hangs before producing anything** — one CPU core pinned near 97%, GPU near
-  idle, model weights resident in VRAM. Captured once with `py-spy`: the VLM
-  thread was inside `cuLibraryGetModule` while launching its first bf16
-  `EmbeddingKernel`. Killing the container and re-running has always resolved it.
-- **runs 1.5–2× slower than usual** on identical input, with GPU clocks and
-  utilisation unchanged. Not explained.
+- one CPU core pinned at ~97%, GPU at 3–5% utilisation and idle;
+- model weights already resident in VRAM (~11 GB), no error, no output;
+- container state `S`, with a single hot thread.
 
-No fix is shipped for either, and no setting here claims to be one. The
-pipeline is Paddle's "rapid validation" path; their own docs note that its
-speed, memory use and stability are not production-grade, and recommend a
-dedicated VLM inference service for that. If a run sits with no output, kill it
-and start again.
+Captured once with `py-spy`: the VLM worker thread was inside
+`cuLibraryGetModule` (the CUDA driver), called from `cudaLaunchKernel` for
+`phi::EmbeddingKernel<bfloat16, GPUContext>`, reached from `greedy_search`.
+
+Two candidate explanations have been **ruled out** by measurement:
+
+- *PTX JIT compilation.* The image contains `sm_120` SASS (`-arch sm_120`
+  annotations in `libphi_gpu.so`), and an embedding kernel runs fine with
+  `CUDA_DISABLE_PTX_JIT=1`, which fails hard if a kernel has to be compiled.
+  So the driver is loading a prebuilt module, not compiling one.
+- *Insufficient VRAM.* No allocation error was ever raised; the same workload
+  completes on the same card, and 205 pages converted successfully once.
+
+What remains is the driver's module-load path over WSL2's `/dev/dxg`. The
+trigger is not identified. **Workaround: kill the container and run again** —
+every stall so far was resolved by a re-run.
+
+### TODO: throughput varies ~1.5× between runs
+
+Same input, same machine, same settings: the 205-page book took 42 minutes on
+one run and 63 on another, with identical GPU clocks and utilisation. Unexplained.
+**Needs more profiling**; not currently under investigation. Do not chase this
+without a proper measurement harness — several earlier attempts produced wrong
+conclusions for exactly that reason.
 
 ## Licence
 
